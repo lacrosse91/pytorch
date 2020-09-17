@@ -52,6 +52,19 @@ def make_stub_from_method(nn_module, method_name):
     return make_stub(func, method_name)
 
 
+def make_stubs_from_exported_methods(mod):
+    stubs = []
+    for name in dir(mod):
+        item = getattr(mod, name, None)
+        if (
+            _jit_internal.get_torchscript_modifier(item)
+            is _jit_internal.FunctionModifiers.EXPORT
+        ):
+            stubs.append(make_stub_from_method(mod, name))
+
+    return stubs
+
+
 # base types that can be constants
 # in addition, tuples and lists of these base types are also considered constants
 # If you edit this list, then you also need to edit the handlers in
@@ -321,7 +334,7 @@ def get_module_concrete_type(nn_module, share_types=True):
 
     return concrete_type
 
-def create_script_module(nn_module, stubs_fn, share_types=True):
+def create_script_module(nn_module, stubs_fn, share_types=True, reuse_stubs_fn=False):
     """
     Creates a new ScriptModule from an nn.Module
 
@@ -336,9 +349,9 @@ def create_script_module(nn_module, stubs_fn, share_types=True):
     assert not isinstance(nn_module, torch.jit.RecursiveScriptModule)
     check_module_initialized(nn_module)
     concrete_type = get_module_concrete_type(nn_module, share_types)
-    return create_script_module_impl(nn_module, concrete_type, stubs_fn)
+    return create_script_module_impl(nn_module, concrete_type, stubs_fn, reuse_stubs_fn=reuse_stubs_fn)
 
-def create_script_module_impl(nn_module, concrete_type, stubs_fn):
+def create_script_module_impl(nn_module, concrete_type, stubs_fn, reuse_stubs_fn=False):
     """
     Convert an nn.Module to a RecursiveScriptModule.
 
@@ -371,8 +384,9 @@ def create_script_module_impl(nn_module, concrete_type, stubs_fn):
             elif isinstance(orig_value, torch.jit.ScriptModule):
                 scripted = orig_value
             else:
-                # use the default recursive rule to compile the module
-                scripted = create_script_module_impl(orig_value, sub_concrete_type, infer_methods_to_compile)
+                # if not reuse_stubs_fn, we will use the default recursive rule to compile the submodule
+                submod_stubs_fn = stubs_fn if reuse_stubs_fn else infer_methods_to_compile
+                scripted = create_script_module_impl(orig_value, sub_concrete_type, submod_stubs_fn, reuse_stubs_fn=reuse_stubs_fn)
 
             cpp_module.setattr(name, scripted)
             script_module._modules[name] = scripted
